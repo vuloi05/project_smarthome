@@ -1,0 +1,6 @@
+bin/
+*.o
+*.log
+client_data.db
+esp32_firmware/.pio/
+esp32_firmware/.vscode/
