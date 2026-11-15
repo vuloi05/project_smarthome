@@ -56,9 +56,19 @@ int is_valid_ac_temp(int temp);
 int is_valid_timer_seconds(int seconds);
 int is_valid_identifier(const char *str, size_t max_len);
 
+#define LOG_LEVEL_INFO  "INFO"
+#define LOG_LEVEL_WARN  "WARN"
+#define LOG_LEVEL_ERROR "ERROR"
+#define LOG_LEVEL_DEBUG "DEBUG"
+
 /**
  * @brief Ghi nhật ký hoạt động kèm nhãn thời gian [YYYY-MM-DD HH:MM:SS] vào file log
  */
 void write_log(const char *log_file, const char *fmt, ...);
+
+/**
+ * @brief Ghi nhật ký hoạt động có gắn mức độ (INFO/WARN/ERROR/DEBUG) và nhãn thời gian
+ */
+void write_log_level(const char *log_file, const char *level, const char *fmt, ...);
 
 #endif /* NET_UTILS_H */

@@ -223,3 +223,29 @@ void write_log(const char *log_file, const char *fmt, ...) {
         }
     }
 }
+
+void write_log_level(const char *log_file, const char *level, const char *fmt, ...) {
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    char time_buf[32];
+    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    char msg_buf[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(msg_buf, sizeof(msg_buf), fmt, args);
+    va_end(args);
+
+    const char *lvl = (level != NULL && strlen(level) > 0) ? level : LOG_LEVEL_INFO;
+
+    printf("[%s] [%s] %s\n", time_buf, lvl, msg_buf);
+    fflush(stdout);
+
+    if (log_file != NULL && strlen(log_file) > 0) {
+        FILE *fp = fopen(log_file, "a");
+        if (fp != NULL) {
+            fprintf(fp, "[%s] [%s] %s\n", time_buf, lvl, msg_buf);
+            fclose(fp);
+        }
+    }
+}
