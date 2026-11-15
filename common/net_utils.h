@@ -47,6 +47,16 @@ ACMode str_to_ac_mode(const char *str);
 double calculate_watt(DeviceType type, int power_on, int fan_speed, ACMode ac_mode, int ac_temp);
 
 /**
+ * @brief Các hàm kiểm tra hợp lệ tham số giao thức điều khiển (Validation Helpers)
+ */
+int is_valid_power_state(const char *state_str);
+int is_valid_fan_speed(int speed);
+int is_valid_ac_mode_str(const char *mode_str);
+int is_valid_ac_temp(int temp);
+int is_valid_timer_seconds(int seconds);
+int is_valid_identifier(const char *str, size_t max_len);
+
+/**
  * @brief Ghi nhật ký hoạt động kèm nhãn thời gian [YYYY-MM-DD HH:MM:SS] vào file log
  */
 void write_log(const char *log_file, const char *fmt, ...);

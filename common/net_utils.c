@@ -161,6 +161,45 @@ double calculate_watt(DeviceType type, int power_on, int fan_speed, ACMode ac_mo
     }
 }
 
+int is_valid_power_state(const char *state_str) {
+    if (state_str == NULL) return 0;
+    return (strcasecmp(state_str, "ON") == 0 || strcasecmp(state_str, "OFF") == 0);
+}
+
+int is_valid_fan_speed(int speed) {
+    return (speed >= 1 && speed <= 3);
+}
+
+int is_valid_ac_mode_str(const char *mode_str) {
+    if (mode_str == NULL) return 0;
+    return (strcasecmp(mode_str, "COOL") == 0 ||
+            strcasecmp(mode_str, "HEAT") == 0 ||
+            strcasecmp(mode_str, "DRY") == 0);
+}
+
+int is_valid_ac_temp(int temp) {
+    return (temp >= 18 && temp <= 30);
+}
+
+int is_valid_timer_seconds(int seconds) {
+    /* Cho phép từ 0 (hủy hẹn giờ) đến tối đa 24 giờ (86400 giây) */
+    return (seconds >= 0 && seconds <= 86400);
+}
+
+int is_valid_identifier(const char *str, size_t max_len) {
+    if (str == NULL) return 0;
+    size_t len = strlen(str);
+    if (len == 0 || len >= max_len) return 0;
+
+    for (size_t i = 0; i < len; i++) {
+        /* Không cho phép ký tự phân cách '|' hoặc ký tự điều khiển dòng */
+        if (str[i] == '|' || str[i] == '\r' || str[i] == '\n') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 void write_log(const char *log_file, const char *fmt, ...) {
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now);

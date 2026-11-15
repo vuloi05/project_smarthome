@@ -225,7 +225,7 @@ void handle_client_command(int client_fd, char *line) {
         char *app_id = strtok_r(NULL, "|", &saveptr);
         char *pass   = strtok_r(NULL, "|", &saveptr);
 
-        if (app_id == NULL || pass == NULL) {
+        if (!is_valid_identifier(app_id, ID_LEN) || !is_valid_identifier(pass, PASS_LEN)) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
             send_line(client_fd, resp);
             return;
@@ -261,7 +261,7 @@ void handle_client_command(int client_fd, char *line) {
         char *old_p = strtok_r(NULL, "|", &saveptr);
         char *new_p = strtok_r(NULL, "|", &saveptr);
 
-        if (old_p == NULL || new_p == NULL || strlen(new_p) == 0) {
+        if (!is_valid_identifier(old_p, PASS_LEN) || !is_valid_identifier(new_p, PASS_LEN)) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
         } else if (strcmp(old_p, g_dev.password) != 0) {
             snprintf(resp, sizeof(resp), "%d|WRONG_OLD_PASSWORD", ERR_WRONG_OLD_PASSWORD);
@@ -276,7 +276,7 @@ void handle_client_command(int client_fd, char *line) {
     /* 3. Lệnh Điều khiển Bật / Tắt: SET_POWER|<token>|<ON|OFF> */
     else if (strcmp(cmd, "SET_POWER") == 0) {
         char *state_str = strtok_r(NULL, "|", &saveptr);
-        if (state_str == NULL || (strcasecmp(state_str, "ON") != 0 && strcasecmp(state_str, "OFF") != 0)) {
+        if (!is_valid_power_state(state_str)) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
         } else {
             g_dev.power_on = (strcasecmp(state_str, "ON") == 0) ? 1 : 0;
@@ -294,11 +294,11 @@ void handle_client_command(int client_fd, char *line) {
         char *sec_str   = strtok_r(NULL, "|", &saveptr);
         char *state_str = strtok_r(NULL, "|", &saveptr);
 
-        if (sec_str == NULL || state_str == NULL) {
+        if (sec_str == NULL || !is_valid_power_state(state_str)) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
         } else {
             int secs = atoi(sec_str);
-            if (secs < 0 || (strcasecmp(state_str, "ON") != 0 && strcasecmp(state_str, "OFF") != 0)) {
+            if (!is_valid_timer_seconds(secs)) {
                 snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
             } else if (secs == 0) {
                 g_dev.timer_active = 0;
@@ -324,7 +324,7 @@ void handle_client_command(int client_fd, char *line) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
         } else {
             int spd = atoi(spd_str);
-            if (spd < 1 || spd > 3) {
+            if (!is_valid_fan_speed(spd)) {
                 snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
             } else {
                 g_dev.fan_speed = spd;
@@ -343,14 +343,11 @@ void handle_client_command(int client_fd, char *line) {
         char *mode_str = strtok_r(NULL, "|", &saveptr);
         char *temp_str = strtok_r(NULL, "|", &saveptr);
 
-        if (g_dev.type != DEV_AC || mode_str == NULL || temp_str == NULL) {
+        if (g_dev.type != DEV_AC || !is_valid_ac_mode_str(mode_str) || temp_str == NULL) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
         } else {
             int temp = atoi(temp_str);
-            if (temp < 18 || temp > 30 ||
-                (strcasecmp(mode_str, "COOL") != 0 &&
-                 strcasecmp(mode_str, "HEAT") != 0 &&
-                 strcasecmp(mode_str, "DRY") != 0)) {
+            if (!is_valid_ac_temp(temp)) {
                 snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
             } else {
                 g_dev.ac_mode = str_to_ac_mode(mode_str);
