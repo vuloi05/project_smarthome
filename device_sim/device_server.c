@@ -8,12 +8,20 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <poll.h>
+#include <signal.h>
 
 #include "../common/protocol.h"
 #include "../common/net_utils.h"
 
 #define MAX_CLIENTS   64
 #define MAX_SESSIONS  64
+
+static volatile sig_atomic_t g_running = 1;
+
+static void handle_shutdown_signal(int sig) {
+    (void)sig;
+    g_running = 0;
+}
 
 /* Cấu trúc lưu phiên xác thực: gắn Token với App ID */
 typedef struct {
@@ -476,11 +484,14 @@ int main(int argc, char *argv[]) {
     fds[1].fd     = tcp_listener;
     fds[1].events = POLLIN;
 
+    signal(SIGINT, handle_shutdown_signal);
+    signal(SIGTERM, handle_shutdown_signal);
+
     write_log(g_dev.log_file, "Thiet bi san sang! UDP Discovery Port=%d, TCP Control Port=%d",
               DISCOVERY_UDP_PORT, g_dev.tcp_port);
 
     /* Vòng lặp chính thăm dò sự kiện với chu kỳ timeout = 1000ms (1 giây) */
-    while (1) {
+    while (g_running) {
         int ret = poll(fds, nfds, 1000);
         if (ret < 0) {
             if (errno == EINTR) continue;
@@ -535,6 +546,10 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    write_log(g_dev.log_file, "[SHUTDOWN] Nhan tin hieu dung he thong, dang dong cac ket noi...");
+    for (int i = 2; i < (int)nfds; i++) {
+        close(fds[i].fd);
+    }
     close(udp_fd);
     close(tcp_listener);
     return 0;
