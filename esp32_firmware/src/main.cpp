@@ -5,36 +5,43 @@
  * Bo mạch  : DOIT ESP32 DEVKIT V1 / ESP32 NodeMCU-32S (Chip ESP-WROOM-32)
  * Giao tiếp: Silicon Labs CP2102 USB to UART Bridge (VID: 10C4, PID: EA60)
  *
- * Phần cứng tích hợp sử dụng ngay trên bo mạch (không bắt buộc nối dây ngoài):
- *  - GPIO 2 : Đèn LED xanh tích hợp trên mạch (On-board Blue LED)
- *             + Chế độ LIGHT: Bật = Sáng 100%, Tắt = Tắt
- *             + Chế độ FAN  : Băm xung PWM độ sáng theo tốc độ gió (Mức 1: 30%, Mức 2: 65%, Mức 3: 100%)
- *             + Chế độ AC   : Băm xung PWM theo công suất làm lạnh/sưởi ấm
- *  - GPIO 0 : Nút nhấn vật lý "BOOT" trên mạch -> Bấm để Bật/Tắt thiết bị trực tiếp!
- *  - GPIO 4 : Chân mở rộng (nếu cắm thêm Module Quạt mini / Relay ngoài)
- *
- * Hỗ trợ cấu hình nhanh qua Serial Monitor (115200 baud) mà không cần nạp lại code:
- *  - Gõ: WIFI|<ten_wifi>|<mat_khau_wifi>   (Lưu vào bộ nhớ Flash NVS của ESP32)
- *  - Gõ: TYPE|<LIGHT|FAN|AC>|<id>|<ten>    (Đổi vai trò thiết bị ngay lập tức)
+ * TÍNH NĂNG MẠNG KÉP (WIFI_AP_STA):
+ *  1. Chế độ phát Wi-Fi riêng (Access Point - AP):
+ *     - Tên Wi-Fi (SSID) : SmartHome_ESP32
+ *     - Mật khẩu Wi-Fi   : 12345678
+ *     - IP cố định ESP32 : 192.168.4.1 (Broadcast: 192.168.4.255)
+ *     -> Giúp Laptop và Điện thoại kết nối trực tiếp với ESP32 mọi lúc mọi nơi
+ *        (kể cả trên phòng học không có Wi-Fi hoặc Wi-Fi trường chặn LAN).
+ *  2. Chế độ thu Wi-Fi (Station - STA):
+ *     - Kết nối đồng thời vào Router Wi-Fi gia đình / Hotspot điện thoại.
+ *  3. Dịch vụ chạy đồng thời trên ESP32:
+ *     - UDP Port 9999 : Lắng nghe lệnh quét SCAN_REQ và phản hồi SCAN_RES
+ *     - TCP Port 8001 : Lắng nghe lệnh điều khiển theo giao thức đồ án (AUTH, SET_POWER...)
+ *     - HTTP Port 80  : Giao diện Web trực quan tại http://192.168.4.1
  * ============================================================================
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <WebServer.h>
 #include <Preferences.h>
 
 /* -------------------- CẤU HÌNH MẶC ĐỊNH -------------------- */
-#define DEFAULT_WIFI_SSID     "TEN_WIFI_CUA_BAN"
-#define DEFAULT_WIFI_PASS     "MAT_KHAU_WIFI"
+#define AP_SSID_PREFIX        "SmartHome_"
+#define AP_DEFAULT_PASS       "12345678"
+
+#define DEFAULT_WIFI_SSID     ""
+#define DEFAULT_WIFI_PASS     ""
 
 #define DEFAULT_DEV_ID        "ESP32_DEV01"
 #define DEFAULT_DEV_TYPE      "LIGHT"         /* "LIGHT", "FAN", hoặc "AC" */
-#define DEFAULT_DEV_NAME      "Den_ESP32_Thuc_Te"
+#define DEFAULT_DEV_NAME      "Thiet_Bi_ESP32"
 #define DEFAULT_DEV_PASS      "123456"
 
 #define DISCOVERY_UDP_PORT    9999
 #define CONTROL_TCP_PORT      8001
+#define WEB_HTTP_PORT         80
 
 /* Chân phần cứng trên DOIT ESP32 DEVKIT V1 */
 #define PIN_ONBOARD_LED       2               /* GPIO 2: LED xanh tích hợp */
@@ -51,11 +58,11 @@ struct AuthSession {
     String token;
 };
 
-/* Biến trạng thái thiết bị */
 Preferences prefs;
 WiFiUDP     udp;
 WiFiServer  tcpServer(CONTROL_TCP_PORT);
 WiFiClient  tcpClients[MAX_TCP_CLIENTS];
+WebServer   webServer(WEB_HTTP_PORT);
 
 String g_wifi_ssid;
 String g_wifi_pass;
@@ -80,9 +87,9 @@ unsigned long g_month_seconds = 0;
 unsigned long g_year_seconds  = 0;
 double        g_total_wh      = 0.0;
 
-unsigned long g_last_tick_ms  = 0;
+unsigned long g_last_tick_ms   = 0;
 bool          g_last_btn_state = HIGH;
-unsigned long g_last_btn_ms   = 0;
+unsigned long g_last_btn_ms    = 0;
 
 AuthSession g_sessions[MAX_SESSIONS];
 
@@ -120,7 +127,6 @@ double calculateWatt() {
     return 40.0;
 }
 
-/* Cập nhật tín hiệu vật lý ra đèn LED GPIO 2 và chân mở rộng GPIO 4 */
 void updateHardwareOutput() {
     g_current_watt = calculateWatt();
 
@@ -132,13 +138,12 @@ void updateHardwareOutput() {
 
     int pwm_duty = 255;
     if (g_dev_type == "LIGHT") {
-        pwm_duty = 255; /* Sáng tối đa 100% */
+        pwm_duty = 255;
     } else if (g_dev_type == "FAN") {
-        if (g_fan_speed == 1) pwm_duty = 75;       /* ~30% */
-        else if (g_fan_speed == 2) pwm_duty = 165; /* ~65% */
-        else pwm_duty = 255;                       /* 100% */
+        if (g_fan_speed == 1) pwm_duty = 75;
+        else if (g_fan_speed == 2) pwm_duty = 165;
+        else pwm_duty = 255;
     } else if (g_dev_type == "AC") {
-        /* Độ sáng tỷ lệ với công suất điều hòa (600W -> 1600W) */
         pwm_duty = map((long)g_current_watt, 600, 1600, 80, 255);
         pwm_duty = constrain(pwm_duty, 60, 255);
     }
@@ -184,8 +189,6 @@ String verifyToken(const String &token) {
     return "";
 }
 
-/* -------------------- XỬ LÝ GIAO THỨC TCP -------------------- */
-
 String splitField(const String &data, char separator, int index) {
     int found = 0;
     int strIndex[] = {0, -1};
@@ -201,6 +204,105 @@ String splitField(const String &data, char separator, int index) {
     return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
 }
 
+/* -------------------- GIAO DIỆN WEB TRỰC TIẾP TRÊN ESP32 (PORT 80) -------------------- */
+
+void setupWebServer() {
+    webServer.on("/", HTTP_GET, []() {
+        String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                      "<title>ESP32 Smart Home Node</title>"
+                      "<style>"
+                      "body{font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;margin:0;padding:20px;}"
+                      ".card{max-width:520px;margin:0 auto;background:#1e293b;border-radius:14px;padding:22px;box-shadow:0 8px 24px rgba(0,0,0,0.4);}"
+                      "h2{margin-top:0;color:#38bdf8;}"
+                      ".badge{display:inline-block;padding:4px 12px;border-radius:99px;font-weight:700;font-size:13px;}"
+                      ".on{background:#22c55e;color:#fff;} .off{background:#64748b;color:#fff;}"
+                      ".row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #334155;font-size:14px;}"
+                      ".btn{display:inline-block;padding:10px 16px;margin:4px 2px;border:none;border-radius:8px;font-weight:600;cursor:pointer;color:#fff;text-decoration:none;font-size:14px;}"
+                      ".btn-on{background:#16a34a;} .btn-off{background:#dc2626;} .btn-act{background:#2563eb;}"
+                      "input,select{padding:8px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;margin:4px 0;}"
+                      "</style></head><body><div class='card'>";
+
+        html += "<h2>⚡ ESP32 Smart Device (" + g_dev_id + ")</h2>";
+        html += "<div class='row'><span>Tên thiết bị:</span><b>" + g_dev_name + "</b></div>";
+        html += "<div class='row'><span>Loại thiết bị:</span><b>" + g_dev_type + "</b></div>";
+        html += "<div class='row'><span>Trạng thái:</span><span class='badge " + String(g_power_on ? "on'>ĐANG BẬT (ON)" : "off'>ĐANG TẮT (OFF)") + "</span></div>";
+        html += "<div class='row'><span>Công suất tức thời:</span><b>" + String(g_current_watt, 1) + " W</b></div>";
+        if (g_dev_type == "FAN") {
+            html += "<div class='row'><span>Tốc độ gió Quạt:</span><b>Mức " + String(g_fan_speed) + "</b></div>";
+        } else if (g_dev_type == "AC") {
+            html += "<div class='row'><span>Chế độ Điều hòa:</span><b>" + g_ac_mode + " - " + String(g_ac_temp) + "°C</b></div>";
+        }
+        html += "<div class='row'><span>Thời gian chạy (Ngày/Tháng/Năm):</span><b>" +
+                String(g_day_seconds) + "s / " + String(g_month_seconds) + "s / " + String(g_year_seconds) + "s</b></div>";
+        html += "<div class='row'><span>Điện năng tiêu thụ:</span><b>" + String(g_total_wh, 4) + " Wh</b></div>";
+        html += "<div class='row'><span>IP AP / IP Wi-Fi:</span><b>" + WiFi.softAPIP().toString() + " / " + WiFi.localIP().toString() + " (TCP:" + String(CONTROL_TCP_PORT) + ")</b></div>";
+
+        html += "<div style='margin-top:16px;'><b>Điều khiển nhanh trên mạch:</b><br>";
+        html += "<a class='btn btn-on' href='/ctrl?power=ON'>Bật (ON)</a> ";
+        html += "<a class='btn btn-off' href='/ctrl?power=OFF'>Tắt (OFF)</a> ";
+        if (g_dev_type == "FAN") {
+            html += "<a class='btn btn-act' href='/ctrl?fan=1'>Gió 1</a> ";
+            html += "<a class='btn btn-act' href='/ctrl?fan=2'>Gió 2</a> ";
+            html += "<a class='btn btn-act' href='/ctrl?fan=3'>Gió 3</a>";
+        }
+        html += "</div>";
+
+        html += "<hr style='border-color:#334155;margin:16px 0;'>";
+        html += "<form action='/config' method='GET'><b>Đổi vai trò thiết bị ESP32:</b><br>";
+        html += "Loại: <select name='type'><option value='LIGHT'>LIGHT (Bóng đèn)</option><option value='FAN'>FAN (Quạt)</option><option value='AC'>AC (Điều hòa)</option></select> ";
+        html += "ID: <input name='id' value='" + g_dev_id + "' size='10'> ";
+        html += "Tên: <input name='name' value='" + g_dev_name + "' size='14'> ";
+        html += "<button class='btn btn-act' type='submit'>Lưu</button></form>";
+
+        html += "</div></body></html>";
+        webServer.send(200, "text/html", html);
+    });
+
+    webServer.on("/ctrl", HTTP_GET, []() {
+        if (webServer.hasArg("power")) {
+            g_power_on = (webServer.arg("power") == "ON");
+            updateHardwareOutput();
+            logActivity(String("[WEB] Chuyen trang thai qua Web UI: ") + (g_power_on ? "ON" : "OFF"));
+        }
+        if (webServer.hasArg("fan")) {
+            int spd = webServer.arg("fan").toInt();
+            if (spd >= 1 && spd <= 3) {
+                g_fan_speed = spd;
+                updateHardwareOutput();
+                logActivity("[WEB] Chinh toc do Quat qua Web UI: Muc " + String(g_fan_speed));
+            }
+        }
+        webServer.sendHeader("Location", "/");
+        webServer.send(302, "text/plain", "");
+    });
+
+    webServer.on("/config", HTTP_GET, []() {
+        if (webServer.hasArg("type")) {
+            String t = webServer.arg("type");
+            if (t == "LIGHT" || t == "FAN" || t == "AC") {
+                g_dev_type = t;
+                prefs.putString("dev_type", g_dev_type);
+            }
+        }
+        if (webServer.hasArg("id") && webServer.arg("id").length() > 0) {
+            g_dev_id = webServer.arg("id");
+            prefs.putString("dev_id", g_dev_id);
+        }
+        if (webServer.hasArg("name") && webServer.arg("name").length() > 0) {
+            g_dev_name = webServer.arg("name");
+            prefs.putString("dev_name", g_dev_name);
+        }
+        updateHardwareOutput();
+        webServer.sendHeader("Location", "/");
+        webServer.send(302, "text/plain", "");
+    });
+
+    webServer.begin();
+}
+
+/* -------------------- XỬ LÝ GIAO THỨC SOCKET TCP (PORT 8001) -------------------- */
+
 void handleClientCommand(WiFiClient &client, String line) {
     line.trim();
     if (line.length() == 0) return;
@@ -208,7 +310,6 @@ void handleClientCommand(WiFiClient &client, String line) {
     String cmd = splitField(line, '|', 0);
     char resp[512];
 
-    /* 1. Xác thực: AUTH|<app_id>|<password> */
     if (cmd == "AUTH") {
         String app_id = splitField(line, '|', 1);
         String pass   = splitField(line, '|', 2);
@@ -232,7 +333,6 @@ void handleClientCommand(WiFiClient &client, String line) {
         return;
     }
 
-    /* Kiểm tra Token cho tất cả các lệnh điều khiển */
     String token  = splitField(line, '|', 1);
     String app_id = verifyToken(token);
     if (app_id.length() == 0) {
@@ -241,14 +341,12 @@ void handleClientCommand(WiFiClient &client, String line) {
         return;
     }
 
-    /* 2. Đổi mật khẩu: PASSWD|<token>|<old_pass>|<new_pass> */
     if (cmd == "PASSWD") {
         String old_p = splitField(line, '|', 2);
         String new_p = splitField(line, '|', 3);
 
         if (old_p != g_dev_pass) {
             client.print("202|WRONG_OLD_PASSWORD\r\n");
-            logActivity("[PASSWD] AppID=" + app_id + " doi mat khau that bai");
         } else if (new_p.length() == 0) {
             client.print("204|INVALID_PARAM\r\n");
         } else {
@@ -258,7 +356,6 @@ void handleClientCommand(WiFiClient &client, String line) {
             logActivity("[PASSWD] AppID=" + app_id + " da doi mat khau thanh cong");
         }
     }
-    /* 3. Bật / Tắt thiết bị: SET_POWER|<token>|<ON|OFF> */
     else if (cmd == "SET_POWER") {
         String st = splitField(line, '|', 2);
         st.toUpperCase();
@@ -274,7 +371,6 @@ void handleClientCommand(WiFiClient &client, String line) {
                         (g_power_on ? "ON" : "OFF") + " (" + String(g_current_watt, 1) + "W)");
         }
     }
-    /* 4. Hẹn giờ: SET_TIMER|<token>|<seconds>|<ON|OFF> */
     else if (cmd == "SET_TIMER") {
         int secs  = splitField(line, '|', 2).toInt();
         String st = splitField(line, '|', 3);
@@ -297,7 +393,6 @@ void handleClientCommand(WiFiClient &client, String line) {
             client.print("204|INVALID_PARAM\r\n");
         }
     }
-    /* 5. Chỉnh tốc độ gió Quạt: SET_FAN|<token>|<1|2|3> */
     else if (cmd == "SET_FAN") {
         int spd = splitField(line, '|', 2).toInt();
         if (g_dev_type != "FAN" || spd < 1 || spd > 3) {
@@ -310,7 +405,6 @@ void handleClientCommand(WiFiClient &client, String line) {
             logActivity("[CONTROL] AppID=" + app_id + " chinh toc do Quat muc " + String(g_fan_speed));
         }
     }
-    /* 6. Chỉnh chế độ Điều hòa: SET_AC|<token>|<COOL|HEAT|DRY>|<18..30> */
     else if (cmd == "SET_AC") {
         String mode = splitField(line, '|', 2);
         mode.toUpperCase();
@@ -329,7 +423,6 @@ void handleClientCommand(WiFiClient &client, String line) {
             logActivity("[CONTROL] AppID=" + app_id + " chinh AC: " + g_ac_mode + " " + String(g_ac_temp) + "C");
         }
     }
-    /* 7. Lấy thông tin chi tiết & Thống kê điện năng: GET_INFO|<token> */
     else if (cmd == "GET_INFO") {
         snprintf(resp, sizeof(resp),
                  "100|INFO|%s|%s|%s|%s|%.1f|%d|%s|%d|%d|%s|%lu|%lu|%lu|%.4f\r\n",
@@ -354,8 +447,6 @@ void handleClientCommand(WiFiClient &client, String line) {
     }
 }
 
-/* -------------------- CẤU HÌNH QUA SERIAL MONITOR -------------------- */
-
 void checkSerialConfig() {
     if (!Serial.available()) return;
     String cmd = Serial.readStringUntil('\n');
@@ -371,7 +462,7 @@ void checkSerialConfig() {
         if (ssid.length() > 0) {
             prefs.putString("wifi_ssid", ssid);
             prefs.putString("wifi_pass", pass);
-            Serial.printf("\n[CONFIG] Da luu Wi-Fi moi: SSID='%s'. Dang ket noi lai...\n", ssid.c_str());
+            Serial.printf("\n[CONFIG] Da luu Wi-Fi moi: SSID='%s'. Dang khoi dong lai...\n", ssid.c_str());
             ESP.restart();
         }
     } else if (tag == "TYPE") {
@@ -389,14 +480,14 @@ void checkSerialConfig() {
     } else if (tag == "STATUS") {
         Serial.println("\n--- TRANG THAI ESP32 HIEN TAI ---");
         Serial.printf("  ID: %s | Loai: %s | Ten: %s\n", g_dev_id.c_str(), g_dev_type.c_str(), g_dev_name.c_str());
-        Serial.printf("  Wi-Fi IP: %s | TCP Port: %d | UDP Port: %d\n",
+        Serial.printf("  [AP Mode]  SSID: %s%s | IP: %s\n",
+                      AP_SSID_PREFIX, g_dev_id.c_str(), WiFi.softAPIP().toString().c_str());
+        Serial.printf("  [STA Mode] IP: %s | TCP Port: %d | UDP Port: %d\n",
                       WiFi.localIP().toString().c_str(), CONTROL_TCP_PORT, DISCOVERY_UDP_PORT);
         Serial.printf("  Power: %s | Watt: %.1fW | Dien nang: %.4f Wh\n",
                       g_power_on ? "ON" : "OFF", g_current_watt, g_total_wh);
     }
 }
-
-/* -------------------- SETUP & LOOP -------------------- */
 
 void setup() {
     Serial.begin(115200);
@@ -415,69 +506,73 @@ void setup() {
     g_dev_name  = prefs.getString("dev_name",  DEFAULT_DEV_NAME);
     g_dev_pass  = prefs.getString("dev_pass",  DEFAULT_DEV_PASS);
 
+    /* Bật chế độ kép: Vừa tự phát Wi-Fi (AP) vừa kết nối Wi-Fi (STA) */
+    WiFi.mode(WIFI_AP_STA);
+    String ap_ssid = String(AP_SSID_PREFIX) + g_dev_id;
+    WiFi.softAP(ap_ssid.c_str(), AP_DEFAULT_PASS);
+
     Serial.println("\n================================================================");
-    Serial.println("   ESP32 SMART HOME DEVICE SERVER (DOIT ESP32 DEVKIT V1)       ");
+    Serial.println("   ESP32 SMART HOME DEVICE (WIFI AP + STA + WEB + SOCKET)      ");
     Serial.println("================================================================");
-    Serial.printf("  Thiet bi : ID=%s | Loai=%s | Ten=%s\n",
+    Serial.printf("  Thiet bi        : ID=%s | Loai=%s | Ten=%s\n",
                   g_dev_id.c_str(), g_dev_type.c_str(), g_dev_name.c_str());
-    Serial.println("  Meo cau hinh nhanh qua Serial Monitor (115200 baud):");
-    Serial.println("   -> Doi Wi-Fi    : WIFI|<ten_wifi>|<mat_khau>");
-    Serial.println("   -> Doi Thiet bi : TYPE|<LIGHT|FAN|AC>|<ma_id>|<ten_thiet_bi>");
-    Serial.println("   -> Xem IP/TT    : STATUS");
-    Serial.println("================================================================");
+    Serial.printf("  [1] Wi-Fi Phat  : SSID='%s' | Pass='%s'\n", ap_ssid.c_str(), AP_DEFAULT_PASS);
+    Serial.printf("      -> IP AP    : %s (Web UI: http://%s)\n",
+                  WiFi.softAPIP().toString().c_str(), WiFi.softAPIP().toString().c_str());
+    Serial.printf("      -> TCP Port : %d | UDP Discovery Port: %d\n",
+                  CONTROL_TCP_PORT, DISCOVERY_UDP_PORT);
 
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(g_wifi_ssid.c_str(), g_wifi_pass.c_str());
-    Serial.printf("Dang ket noi Wi-Fi '%s' ", g_wifi_ssid.c_str());
-
-    int retry = 0;
-    while (WiFi.status() != WL_CONNECTED && retry < 30) {
-        delay(500);
-        Serial.print(".");
-        checkSerialConfig();
-        retry++;
-    }
-    Serial.println();
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[OK] Da ket noi Wi-Fi thanh cong!");
-        Serial.print("  -> Dia chi IP cua ESP32 : ");
-        Serial.println(WiFi.localIP());
-        Serial.printf("  -> UDP Discovery Port   : %d\n", DISCOVERY_UDP_PORT);
-        Serial.printf("  -> TCP Control Port     : %d\n", CONTROL_TCP_PORT);
-
-        /* Nháy đèn LED 3 lần báo hiệu kết nối mạng thành công */
-        for (int i = 0; i < 3; i++) {
-            analogWrite(PIN_ONBOARD_LED, 255);
-            delay(150);
-            analogWrite(PIN_ONBOARD_LED, 0);
-            delay(150);
+    if (g_wifi_ssid.length() > 0) {
+        WiFi.begin(g_wifi_ssid.c_str(), g_wifi_pass.c_str());
+        Serial.printf("  [2] Dang ket noi Wi-Fi STA '%s' ", g_wifi_ssid.c_str());
+        int retry = 0;
+        while (WiFi.status() != WL_CONNECTED && retry < 16) {
+            delay(400);
+            Serial.print(".");
+            checkSerialConfig();
+            retry++;
+        }
+        Serial.println();
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("      -> Da ket noi STA! IP: %s\n", WiFi.localIP().toString().c_str());
+        } else {
+            Serial.println("      -> Khong ket noi duoc STA (Van hoat dong binh thuong qua Wi-Fi AP 192.168.4.1)");
         }
     } else {
-        Serial.println("[!] Chua ket noi duoc Wi-Fi. Hay nhap lenh WIFI|<ssid>|<pass> vao Serial Monitor!");
+        Serial.println("  [2] Chua cau hinh Wi-Fi STA (Dung Wi-Fi AP 192.168.4.1 hoac go WIFI|<ssid>|<pass>)");
+    }
+    Serial.println("================================================================");
+
+    /* Nháy LED 3 lần báo hiệu mạch đã sẵn sàng */
+    for (int i = 0; i < 3; i++) {
+        analogWrite(PIN_ONBOARD_LED, 255);
+        delay(120);
+        analogWrite(PIN_ONBOARD_LED, 0);
+        delay(120);
     }
 
     udp.begin(DISCOVERY_UDP_PORT);
     tcpServer.begin();
+    setupWebServer();
     g_last_tick_ms = millis();
 }
 
 void loop() {
-    /* 1. Kiểm tra lệnh cấu hình từ Serial Monitor */
     checkSerialConfig();
+    webServer.handleClient();
 
-    /* 2. Kiểm tra nút nhấn vật lý BOOT (GPIO 0) trên mạch ESP32 */
+    /* Kiểm tra nút nhấn vật lý BOOT (GPIO 0) trên mạch ESP32 */
     bool btn_state = digitalRead(PIN_BOOT_BUTTON);
     if (btn_state == LOW && g_last_btn_state == HIGH && (millis() - g_last_btn_ms > 250)) {
         g_last_btn_ms = millis();
         g_power_on = !g_power_on;
         updateHardwareOutput();
-        logActivity(String("[BUTTON] Nhan nut BOOT tren mach ESP32 -> Chuyen trang thai sang ") +
+        logActivity(String("[BUTTON] Nhan nut BOOT tren mach -> Chuyen trang thai sang ") +
                     (g_power_on ? "ON" : "OFF"));
     }
     g_last_btn_state = btn_state;
 
-    /* 3. Bộ đếm thời gian mỗi 1 giây (1000ms): Tính điện năng & Hẹn giờ */
+    /* Bộ đếm 1 giây: Tính điện năng & Hẹn giờ */
     if (millis() - g_last_tick_ms >= 1000) {
         unsigned long elapsed_sec = (millis() - g_last_tick_ms) / 1000;
         g_last_tick_ms += elapsed_sec * 1000;
@@ -502,7 +597,7 @@ void loop() {
         }
     }
 
-    /* 4. Lắng nghe gói tin Quét thiết bị qua UDP (Port 9999) */
+    /* Lắng nghe gói tin Quét thiết bị qua UDP (Port 9999) */
     int packetSize = udp.parsePacket();
     if (packetSize > 0) {
         char buf[256];
@@ -523,7 +618,7 @@ void loop() {
         }
     }
 
-    /* 5. Chấp nhận và xử lý các kết nối điều khiển qua TCP (Port 8001) */
+    /* Chấp nhận và xử lý kết nối điều khiển qua TCP (Port 8001) */
     if (tcpServer.hasClient()) {
         bool accepted = false;
         for (int i = 0; i < MAX_TCP_CLIENTS; i++) {

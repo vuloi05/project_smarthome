@@ -124,7 +124,15 @@ void menu_scan_devices(void) {
     sendto(udp_sock, scan_msg, strlen(scan_msg), 0,
            (struct sockaddr *)&bcast_addr, sizeof(bcast_addr));
 
-    /* 3. Nếu người dùng nhập IP của ESP32 hoặc Broadcast subnet (vd 192.168.1.255) */
+    /* 3. Gửi tới dải mạng SoftAP mặc định của ESP32 (192.168.4.1 & 192.168.4.255) */
+    bcast_addr.sin_addr.s_addr = inet_addr("192.168.4.255");
+    sendto(udp_sock, scan_msg, strlen(scan_msg), 0,
+           (struct sockaddr *)&bcast_addr, sizeof(bcast_addr));
+    bcast_addr.sin_addr.s_addr = inet_addr("192.168.4.1");
+    sendto(udp_sock, scan_msg, strlen(scan_msg), 0,
+           (struct sockaddr *)&bcast_addr, sizeof(bcast_addr));
+
+    /* 4. Nếu người dùng nhập IP của ESP32 hoặc Broadcast subnet (vd 192.168.1.255) */
     if (strlen(custom_ip) > 0) {
         bcast_addr.sin_addr.s_addr = inet_addr(custom_ip);
         sendto(udp_sock, scan_msg, strlen(scan_msg), 0,
