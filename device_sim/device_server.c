@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <poll.h>
 #include <signal.h>
+#include <limits.h>
 
 #include "../common/protocol.h"
 #include "../common/net_utils.h"
@@ -21,6 +22,17 @@ static volatile sig_atomic_t g_running = 1;
 static void handle_shutdown_signal(int sig) {
     (void)sig;
     g_running = 0;
+}
+
+static int parse_strict_int(const char *str, int *out) {
+    if (str == NULL || *str == '\0' || *str == ' ' || *str == '\t' || out == NULL) return 0;
+    char *endptr = NULL;
+    errno = 0;
+    long val = strtol(str, &endptr, 10);
+    if (errno != 0 || endptr == str || *endptr != '\0') return 0;
+    if (val < INT_MIN || val > INT_MAX) return 0;
+    *out = (int)val;
+    return 1;
 }
 
 /* Cấu trúc lưu phiên xác thực: gắn Token với App ID */
@@ -171,6 +183,7 @@ const char* create_session_token(const char *app_id) {
     if (free_slot == -1) free_slot = 0; /* Ghi đè slot đầu nếu đầy */
     g_dev.sessions[free_slot].active = 1;
     strncpy(g_dev.sessions[free_slot].app_id, app_id, ID_LEN - 1);
+    g_dev.sessions[free_slot].app_id[ID_LEN - 1] = '\0';
     generate_random_hex(g_dev.sessions[free_slot].token, 16);
     return g_dev.sessions[free_slot].token;
 }
@@ -249,7 +262,7 @@ void handle_client_command(int client_fd, char *line) {
         } else {
             snprintf(resp, sizeof(resp), "%d|WRONG_PASSWORD", ERR_WRONG_PASSWORD);
             send_line(client_fd, resp);
-            write_log(g_dev.log_file, "[AUTH] AppID=%s nhap sai mat khau!", app_id);
+            write_log_level(g_dev.log_file, LOG_LEVEL_WARN, "[AUTH] AppID=%s nhap sai mat khau!", app_id);
         }
         return;
     }
@@ -260,7 +273,7 @@ void handle_client_command(int client_fd, char *line) {
     if (app_id == NULL) {
         snprintf(resp, sizeof(resp), "%d|UNAUTHORIZED", ERR_UNAUTHORIZED);
         send_line(client_fd, resp);
-        write_log(g_dev.log_file, "[SECURITY] Tu choi lenh '%s' do Token khong hop le!", cmd);
+        write_log_level(g_dev.log_file, LOG_LEVEL_WARN, "[SECURITY] Tu choi lenh '%s' do Token khong hop le!", cmd);
         return;
     }
 
@@ -273,9 +286,10 @@ void handle_client_command(int client_fd, char *line) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
         } else if (strcmp(old_p, g_dev.password) != 0) {
             snprintf(resp, sizeof(resp), "%d|WRONG_OLD_PASSWORD", ERR_WRONG_OLD_PASSWORD);
-            write_log(g_dev.log_file, "[PASSWD] AppID=%s doi mat khau that bai (sai mat khau cu)", app_id);
+            write_log_level(g_dev.log_file, LOG_LEVEL_WARN, "[PASSWD] AppID=%s doi mat khau that bai (sai mat khau cu)", app_id);
         } else {
             strncpy(g_dev.password, new_p, sizeof(g_dev.password) - 1);
+            g_dev.password[sizeof(g_dev.password) - 1] = '\0';
             snprintf(resp, sizeof(resp), "%d|PASSWD_OK", STATUS_OK);
             write_log(g_dev.log_file, "[PASSWD] AppID=%s da doi mat khau thiet bi thanh cong", app_id);
         }
@@ -302,47 +316,40 @@ void handle_client_command(int client_fd, char *line) {
         char *sec_str   = strtok_r(NULL, "|", &saveptr);
         char *state_str = strtok_r(NULL, "|", &saveptr);
 
-        if (sec_str == NULL || !is_valid_power_state(state_str)) {
+        int secs = 0;
+        if (!parse_strict_int(sec_str, &secs) || !is_valid_timer_seconds(secs) ||
+            !is_valid_power_state(state_str)) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
+        } else if (secs == 0) {
+            g_dev.timer_active = 0;
+            g_dev.timer_remaining = 0;
+            snprintf(resp, sizeof(resp), "%d|TIMER_CANCELLED", STATUS_OK);
+            write_log(g_dev.log_file, "[TIMER] AppID=%s da huy hen gio", app_id);
         } else {
-            int secs = atoi(sec_str);
-            if (!is_valid_timer_seconds(secs)) {
-                snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
-            } else if (secs == 0) {
-                g_dev.timer_active = 0;
-                g_dev.timer_remaining = 0;
-                snprintf(resp, sizeof(resp), "%d|TIMER_CANCELLED", STATUS_OK);
-                write_log(g_dev.log_file, "[TIMER] AppID=%s da huy hen gio", app_id);
-            } else {
-                g_dev.timer_active = 1;
-                g_dev.timer_remaining = secs;
-                g_dev.timer_target_on = (strcasecmp(state_str, "ON") == 0) ? 1 : 0;
-                snprintf(resp, sizeof(resp), "%d|TIMER_OK|%d|%s",
-                         STATUS_OK, secs, g_dev.timer_target_on ? "ON" : "OFF");
-                write_log(g_dev.log_file, "[TIMER] AppID=%s dat hen gio: sau %d giay se %s",
-                          app_id, secs, g_dev.timer_target_on ? "ON" : "OFF");
-            }
+            g_dev.timer_active = 1;
+            g_dev.timer_remaining = secs;
+            g_dev.timer_target_on = (strcasecmp(state_str, "ON") == 0) ? 1 : 0;
+            snprintf(resp, sizeof(resp), "%d|TIMER_OK|%d|%s",
+                     STATUS_OK, secs, g_dev.timer_target_on ? "ON" : "OFF");
+            write_log(g_dev.log_file, "[TIMER] AppID=%s dat hen gio: sau %d giay se %s",
+                      app_id, secs, g_dev.timer_target_on ? "ON" : "OFF");
         }
         send_line(client_fd, resp);
     }
     /* 5. Lệnh Điều chỉnh tốc độ gió Quạt: SET_FAN|<token>|<1|2|3> */
     else if (strcmp(cmd, "SET_FAN") == 0) {
         char *spd_str = strtok_r(NULL, "|", &saveptr);
-        if (g_dev.type != DEV_FAN || spd_str == NULL) {
+        int spd = 0;
+        if (g_dev.type != DEV_FAN || !parse_strict_int(spd_str, &spd) || !is_valid_fan_speed(spd)) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
         } else {
-            int spd = atoi(spd_str);
-            if (!is_valid_fan_speed(spd)) {
-                snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
-            } else {
-                g_dev.fan_speed = spd;
-                g_dev.current_watt = calculate_watt(g_dev.type, g_dev.power_on,
-                                                    g_dev.fan_speed, g_dev.ac_mode, g_dev.ac_temp);
-                snprintf(resp, sizeof(resp), "%d|FAN_OK|%d|%.1f",
-                         STATUS_OK, g_dev.fan_speed, g_dev.current_watt);
-                write_log(g_dev.log_file, "[CONTROL] AppID=%s chinh toc do quat: Muc %d (Cong suat: %.1fW)",
-                          app_id, g_dev.fan_speed, g_dev.current_watt);
-            }
+            g_dev.fan_speed = spd;
+            g_dev.current_watt = calculate_watt(g_dev.type, g_dev.power_on,
+                                                g_dev.fan_speed, g_dev.ac_mode, g_dev.ac_temp);
+            snprintf(resp, sizeof(resp), "%d|FAN_OK|%d|%.1f",
+                     STATUS_OK, g_dev.fan_speed, g_dev.current_watt);
+            write_log(g_dev.log_file, "[CONTROL] AppID=%s chinh toc do quat: Muc %d (Cong suat: %.1fW)",
+                      app_id, g_dev.fan_speed, g_dev.current_watt);
         }
         send_line(client_fd, resp);
     }
@@ -351,22 +358,19 @@ void handle_client_command(int client_fd, char *line) {
         char *mode_str = strtok_r(NULL, "|", &saveptr);
         char *temp_str = strtok_r(NULL, "|", &saveptr);
 
-        if (g_dev.type != DEV_AC || !is_valid_ac_mode_str(mode_str) || temp_str == NULL) {
+        int temp = 0;
+        if (g_dev.type != DEV_AC || !is_valid_ac_mode_str(mode_str) ||
+            !parse_strict_int(temp_str, &temp) || !is_valid_ac_temp(temp)) {
             snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
         } else {
-            int temp = atoi(temp_str);
-            if (!is_valid_ac_temp(temp)) {
-                snprintf(resp, sizeof(resp), "%d|INVALID_PARAM", ERR_INVALID_PARAM);
-            } else {
-                g_dev.ac_mode = str_to_ac_mode(mode_str);
-                g_dev.ac_temp = temp;
-                g_dev.current_watt = calculate_watt(g_dev.type, g_dev.power_on,
-                                                    g_dev.fan_speed, g_dev.ac_mode, g_dev.ac_temp);
-                snprintf(resp, sizeof(resp), "%d|AC_OK|%s|%d|%.1f",
-                         STATUS_OK, ac_mode_to_str(g_dev.ac_mode), g_dev.ac_temp, g_dev.current_watt);
-                write_log(g_dev.log_file, "[CONTROL] AppID=%s chinh Dieu hoa: Che do=%s, Nhiet do=%dC (Cong suat: %.1fW)",
-                          app_id, ac_mode_to_str(g_dev.ac_mode), g_dev.ac_temp, g_dev.current_watt);
-            }
+            g_dev.ac_mode = str_to_ac_mode(mode_str);
+            g_dev.ac_temp = temp;
+            g_dev.current_watt = calculate_watt(g_dev.type, g_dev.power_on,
+                                                g_dev.fan_speed, g_dev.ac_mode, g_dev.ac_temp);
+            snprintf(resp, sizeof(resp), "%d|AC_OK|%s|%d|%.1f",
+                     STATUS_OK, ac_mode_to_str(g_dev.ac_mode), g_dev.ac_temp, g_dev.current_watt);
+            write_log(g_dev.log_file, "[CONTROL] AppID=%s chinh Dieu hoa: Che do=%s, Nhiet do=%dC (Cong suat: %.1fW)",
+                      app_id, ac_mode_to_str(g_dev.ac_mode), g_dev.ac_temp, g_dev.current_watt);
         }
         send_line(client_fd, resp);
     }
@@ -416,8 +420,14 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    int tcp_port = 0;
+    if (!parse_strict_int(argv[3], &tcp_port) || tcp_port < 1 || tcp_port > 65535) {
+        fprintf(stderr, "Loi: TCP_PORT khong hop le '%s' (phai trong khoang 1..65535)\n", argv[3]);
+        return 1;
+    }
+
     const char *dev_name = (argc >= 6) ? argv[5] : NULL;
-    init_device(argv[1], argv[2], atoi(argv[3]), argv[4], dev_name);
+    init_device(argv[1], argv[2], tcp_port, argv[4], dev_name);
 
     /* 1. Tạo UDP Socket lắng nghe lệnh Quét trên cổng 9999 */
     int udp_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -486,9 +496,11 @@ int main(int argc, char *argv[]) {
 
     signal(SIGINT, handle_shutdown_signal);
     signal(SIGTERM, handle_shutdown_signal);
+    signal(SIGPIPE, SIG_IGN);
 
-    write_log(g_dev.log_file, "Thiet bi san sang! UDP Discovery Port=%d, TCP Control Port=%d",
-              DISCOVERY_UDP_PORT, g_dev.tcp_port);
+    write_log_level(g_dev.log_file, LOG_LEVEL_INFO,
+                    "Thiet bi san sang! UDP Discovery Port=%d, TCP Control Port=%d",
+                    DISCOVERY_UDP_PORT, g_dev.tcp_port);
 
     /* Vòng lặp chính thăm dò sự kiện với chu kỳ timeout = 1000ms (1 giây) */
     while (g_running) {
@@ -546,7 +558,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    write_log(g_dev.log_file, "[SHUTDOWN] Nhan tin hieu dung he thong, dang dong cac ket noi...");
+    write_log_level(g_dev.log_file, LOG_LEVEL_INFO,
+                    "[SHUTDOWN] Nhan tin hieu dung he thong, dang dong cac ket noi...");
     for (int i = 2; i < (int)nfds; i++) {
         close(fds[i].fd);
     }
