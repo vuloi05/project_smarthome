@@ -64,9 +64,13 @@ int home_save(const UserAppData *data, const char *db_file) {
 }
 
 int home_load(UserAppData *data, const char *db_file) {
-    if (db_file == NULL) return -1;
+    if (data == NULL || db_file == NULL) return -1;
     FILE *fp = fopen(db_file, "r");
     if (!fp) return -1;
+
+    memset(data, 0, sizeof(UserAppData));
+    data->next_house_id = 1;
+    data->next_room_id  = 1;
 
     char line[512];
     int h_idx = 0, r_idx = 0, d_idx = 0;
@@ -140,11 +144,13 @@ int home_load(UserAppData *data, const char *db_file) {
 /* ==================== QUẢN LÝ CĂN NHÀ ==================== */
 
 int house_add(UserAppData *data, const char *name) {
+    if (!data || !is_valid_identifier(name, NAME_LEN)) return -1;
     for (int i = 0; i < MAX_HOUSES; i++) {
         if (!data->houses[i].used) {
             data->houses[i].used     = 1;
             data->houses[i].house_id = data->next_house_id++;
             strncpy(data->houses[i].name, name, NAME_LEN - 1);
+            data->houses[i].name[NAME_LEN - 1] = '\0';
             return data->houses[i].house_id;
         }
     }
@@ -152,6 +158,7 @@ int house_add(UserAppData *data, const char *name) {
 }
 
 House* house_find(UserAppData *data, int house_id) {
+    if (!data) return NULL;
     for (int i = 0; i < MAX_HOUSES; i++) {
         if (data->houses[i].used && data->houses[i].house_id == house_id) {
             return &data->houses[i];
@@ -161,13 +168,16 @@ House* house_find(UserAppData *data, int house_id) {
 }
 
 int house_rename(UserAppData *data, int house_id, const char *new_name) {
+    if (!data || !is_valid_identifier(new_name, NAME_LEN)) return -1;
     House *h = house_find(data, house_id);
     if (!h) return -1;
     strncpy(h->name, new_name, NAME_LEN - 1);
+    h->name[NAME_LEN - 1] = '\0';
     return 0;
 }
 
 int house_delete(UserAppData *data, int house_id) {
+    if (!data) return -1;
     House *h = house_find(data, house_id);
     if (!h) return -1;
 
@@ -201,6 +211,7 @@ void house_list(const UserAppData *data) {
 /* ==================== QUẢN LÝ PHÒNG ==================== */
 
 int room_add(UserAppData *data, int house_id, const char *name) {
+    if (!data || !is_valid_identifier(name, NAME_LEN)) return -1;
     if (house_find(data, house_id) == NULL) return -1;
     for (int i = 0; i < MAX_ROOMS; i++) {
         if (!data->rooms[i].used) {
@@ -208,6 +219,7 @@ int room_add(UserAppData *data, int house_id, const char *name) {
             data->rooms[i].room_id  = data->next_room_id++;
             data->rooms[i].house_id = house_id;
             strncpy(data->rooms[i].name, name, NAME_LEN - 1);
+            data->rooms[i].name[NAME_LEN - 1] = '\0';
             return data->rooms[i].room_id;
         }
     }
@@ -215,6 +227,7 @@ int room_add(UserAppData *data, int house_id, const char *name) {
 }
 
 Room* room_find(UserAppData *data, int room_id) {
+    if (!data) return NULL;
     for (int i = 0; i < MAX_ROOMS; i++) {
         if (data->rooms[i].used && data->rooms[i].room_id == room_id) {
             return &data->rooms[i];
@@ -224,13 +237,16 @@ Room* room_find(UserAppData *data, int room_id) {
 }
 
 int room_rename(UserAppData *data, int room_id, const char *new_name) {
+    if (!data || !is_valid_identifier(new_name, NAME_LEN)) return -1;
     Room *r = room_find(data, room_id);
     if (!r) return -1;
     strncpy(r->name, new_name, NAME_LEN - 1);
+    r->name[NAME_LEN - 1] = '\0';
     return 0;
 }
 
 int room_delete(UserAppData *data, int room_id) {
+    if (!data) return -1;
     Room *r = room_find(data, room_id);
     if (!r) return -1;
 
@@ -289,6 +305,7 @@ void room_list_all(const UserAppData *data) {
 /* ==================== QUẢN LÝ THIẾT BỊ TRONG PHÒNG ==================== */
 
 ManagedDevice* device_find(UserAppData *data, const char *dev_id) {
+    if (!data || !dev_id) return NULL;
     for (int i = 0; i < MAX_USER_DEVICES; i++) {
         if (data->devices[i].used && strcasecmp(data->devices[i].dev_id, dev_id) == 0) {
             return &data->devices[i];
@@ -299,6 +316,13 @@ ManagedDevice* device_find(UserAppData *data, const char *dev_id) {
 
 int device_add_to_room(UserAppData *data, int room_id, const char *dev_id,
                        DeviceType type, const char *name, const char *ip, int tcp_port) {
+    if (!data ||
+        !is_valid_identifier(dev_id, ID_LEN) ||
+        !is_valid_identifier(name, NAME_LEN) ||
+        !is_valid_identifier(ip, sizeof(data->devices[0].ip)) ||
+        tcp_port <= 0 || tcp_port > 65535) {
+        return -1;
+    }
     if (room_find(data, room_id) == NULL) return -1;
 
     /* Nếu thiết bị đã tồn tại thì cập nhật lại phòng và địa chỉ IP:Port */
@@ -307,7 +331,9 @@ int device_add_to_room(UserAppData *data, int room_id, const char *dev_id,
         existing->room_id  = room_id;
         existing->type     = type;
         strncpy(existing->name, name, NAME_LEN - 1);
+        existing->name[NAME_LEN - 1] = '\0';
         strncpy(existing->ip, ip, sizeof(existing->ip) - 1);
+        existing->ip[sizeof(existing->ip) - 1] = '\0';
         existing->tcp_port = tcp_port;
         return 0;
     }
@@ -316,10 +342,13 @@ int device_add_to_room(UserAppData *data, int room_id, const char *dev_id,
         if (!data->devices[i].used) {
             data->devices[i].used     = 1;
             strncpy(data->devices[i].dev_id, dev_id, ID_LEN - 1);
+            data->devices[i].dev_id[ID_LEN - 1] = '\0';
             data->devices[i].room_id  = room_id;
             data->devices[i].type     = type;
             strncpy(data->devices[i].name, name, NAME_LEN - 1);
+            data->devices[i].name[NAME_LEN - 1] = '\0';
             strncpy(data->devices[i].ip, ip, sizeof(data->devices[i].ip) - 1);
+            data->devices[i].ip[sizeof(data->devices[i].ip) - 1] = '\0';
             data->devices[i].tcp_port = tcp_port;
             data->devices[i].token[0] = '\0';
             return 0;
@@ -329,6 +358,7 @@ int device_add_to_room(UserAppData *data, int room_id, const char *dev_id,
 }
 
 int device_remove(UserAppData *data, const char *dev_id) {
+    if (!data || !dev_id) return -1;
     ManagedDevice *d = device_find(data, dev_id);
     if (!d) return -1;
     d->used = 0;
