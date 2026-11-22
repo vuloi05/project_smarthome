@@ -21,7 +21,10 @@ $(BIN_DIR)/user_client: $(CLIENT_SRC) $(COMMON_SRC) | $(BIN_DIR)
 $(BIN_DIR)/web_dashboard: $(WEB_SRC) $(COMMON_SRC) | $(BIN_DIR)
 	$(CC) $(CFLAGS) $(WEB_SRC) $(COMMON_SRC) -o $(BIN_DIR)/web_dashboard
 
+test: all
+	python3 scripts/test_protocol.py --spawn-device
+
 clean:
 	rm -rf $(BIN_DIR) device_sim/device_server *.log client_data.db
 
-.PHONY: all clean
+.PHONY: all clean test
