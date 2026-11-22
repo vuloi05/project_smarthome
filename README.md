@@ -1,5 +1,7 @@
 # Hệ Thống Điều Khiển Thiết Bị Điện Thông Minh (IT4062 - Smart Home)
 
+[![Smart Home CI](https://github.com/vuloi05/project_smarthome/actions/workflows/ci.yml/badge.svg)](https://github.com/vuloi05/project_smarthome/actions/workflows/ci.yml)
+
 Đồ án học phần **IT4062 — Thực hành Lập trình mạng** (Trường CNTT&TT - Đại học Bách khoa Hà Nội).  
 Đề tài 11: **Xây dựng ứng dụng điều khiển thiết bị điện (Mô phỏng trên Linux C & Phần cứng thực tế ESP32)**.
 
@@ -107,3 +109,29 @@ Sau khi biên dịch, 2 file thực thi sẽ nằm trong thư mục `bin/`:
      STATUS
      ```
 4. Khi mạch ESP32 đã kết nối Wi-Fi và in ra địa chỉ IP (ví dụ `192.168.1.50`), trong chương trình `./bin/user_client`, bạn vào mục **`4. Quét tìm thiết bị`** và nhập địa chỉ IP `192.168.1.50` (hoặc địa chỉ Broadcast của mạng Wi-Fi như `192.168.1.255`), ứng dụng sẽ phát hiện ra ngay mạch ESP32 và điều khiển phần cứng theo thời gian thực!
+
+---
+
+## 5. Kiểm thử Giao thức Mạng Tự động (Automated Testing & CI/CD)
+
+Hệ thống tích hợp sẵn bộ kiểm thử giao thức tự động chuẩn hóa bằng Python (`scripts/test_protocol.py`) và luồng GitHub Actions CI (`.github/workflows/ci.yml`).
+
+### Chạy test tự động với Makefile
+```bash
+make test
+```
+Lệnh này sẽ tự động:
+1. Biên dịch toàn bộ các ứng dụng C (`device_server`, `user_client`, `web_dashboard`).
+2. Tự động spawn thiết bị mô phỏng tạm thời và kiểm thử toàn diện các luồng mạng:
+   - **UDP Broadcast Discovery**: Quét thiết bị mạng qua `SCAN_REQ` $\rightarrow$ `SCAN_RES`.
+   - **TCP Authentication**: Kiểm tra mã `201|WRONG_PASSWORD` và xác thực thành công `100|AUTH_OK` cấp Token.
+   - **Bảo mật & Phân quyền**: Ngăn chặn truy cập trái phép bằng Token sai `203|UNAUTHORIZED`.
+   - **Điều khiển thiết bị**: Bật/Tắt `SET_POWER`, truy vấn trạng thái `GET_INFO`, hẹn giờ `SET_TIMER`.
+   - **Kiểm tra tham số**: Xử lý lỗi dữ liệu không hợp lệ `204|INVALID_PARAM`.
+3. Tắt tiến trình an toàn và hiển thị bảng kết quả latency từng bài test.
+
+### Kiểm thử với thiết bị đang chạy độc lập
+```bash
+python3 scripts/test_protocol.py --host 127.0.0.1 --port 8001 --password 123456
+```
+
