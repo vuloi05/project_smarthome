@@ -18,11 +18,14 @@ project_smarthome/
 ├── client_app/
 │   ├── home_manager.h      # Cấu trúc dữ liệu phân cấp: Căn nhà -> Phòng -> Thiết bị
 │   ├── home_manager.c      # Các hàm quản lý CRUD và lưu trữ bền vững (client_data.db)
-│   └── user_client.c       # Ứng dụng điều khiển cho người dùng (Menu CLI, Quét UDP, Điều khiển TCP)
+│   ├── user_client.c       # Ứng dụng điều khiển cho người dùng (Menu CLI, Quét UDP, Điều khiển TCP)
+│   └── web_dashboard.c     # Cổng Web trung tâm viết bằng C (HTTP Port 8080 -> Giao thức UDP/TCP)
 ├── esp32_firmware/
 │   ├── platformio.ini      # Cấu hình PlatformIO cho mạch DOIT ESP32 DEVKIT V1 (CP2102)
 │   └── src/
-│       └── main.cpp        # Firmware cho vi điều khiển ESP32 (Wi-Fi, UDP 9999, TCP 8001, PWM LED/Fan)
+│       └── main.cpp        # Firmware ESP32 (Chế độ Wi-Fi Kép AP+STA, Web Portal Port 80, UDP 9999, TCP 8001)
+├── scripts/
+│   └── run_sim_devices.sh  # Script khởi động/dừng nhanh 3 thiết bị mô phỏng
 ├── Makefile                # Tự động biên dịch toàn bộ chương trình Linux C
 └── README.md               # Tài liệu hướng dẫn sử dụng và đặc tả giao thức
 ```
@@ -56,9 +59,10 @@ project_smarthome/
 cd project_smarthome
 make
 ```
-Sau khi biên dịch, 2 file thực thi sẽ nằm trong thư mục `bin/`:
+Sau khi biên dịch, 3 file thực thi sẽ nằm trong thư mục `bin/`:
 - `bin/device_server`: Chương trình mô phỏng thiết bị điện.
-- `bin/user_client`: Chương trình điều khiển cho người dùng.
+- `bin/user_client`: Chương trình điều khiển dòng lệnh (CLI) cho người dùng.
+- `bin/web_dashboard`: Cổng giao diện Web trung tâm (`http://localhost:8080`) dùng chung cơ sở dữ liệu `client_data.db` với CLI.
 
 ### Bước 2: Khởi chạy các Thiết bị mô phỏng (Mở các tab Terminal riêng hoặc chạy ngầm)
 ```bash
@@ -72,19 +76,40 @@ Sau khi biên dịch, 2 file thực thi sẽ nằm trong thư mục `bin/`:
 ./bin/device_server AC01 AC 8003 123456 Dieu_Hoa_Phong_Khach
 ```
 
-### Bước 3: Khởi chạy Chương trình Điều khiển cho Người dùng
+Hoặc khởi chạy / dừng nhanh cả 3 thiết bị mô phỏng bằng script tiện ích:
 ```bash
-./bin/user_client
+./scripts/run_sim_devices.sh start    # Khởi động cả 3 thiết bị chạy ngầm
+./scripts/run_sim_devices.sh status   # Kiểm tra trạng thái các thiết bị
+./scripts/run_sim_devices.sh stop     # Dừng an toàn bằng SIGTERM
 ```
-1. Chọn **`4. Quét tìm thiết bị trên mạng`** $\rightarrow$ Nhấn `Enter` để tự động tìm toàn bộ các thiết bị đang chạy và thêm vào Phòng.
-2. Chọn **`5. Kết nối & Điều khiển Thiết bị`** $\rightarrow$ Nhập mã thiết bị (VD: `LIGHT01`, `FAN01`, `AC01` hoặc `ESP32_DEV01`) và nhập mật khẩu `123456`.
+
+### Bước 3: Điều khiển qua Giao diện Dòng lệnh (CLI) hoặc Giao diện Web Trung tâm
+- **Cách 1 — Chạy ứng dụng CLI:**
+  ```bash
+  ./bin/user_client
+  ```
+  1. Chọn **`4. Quét tìm thiết bị trên mạng`** $\rightarrow$ Nhấn `Enter` để tự động tìm toàn bộ các thiết bị đang chạy và thêm vào Phòng.
+  2. Chọn **`5. Kết nối & Điều khiển Thiết bị`** $\rightarrow$ Nhập mã thiết bị (VD: `LIGHT01`, `FAN01`, `AC01` hoặc `ESP32_DEV01`) và nhập mật khẩu `123456`.
+
+- **Cách 2 — Chạy Cổng Giao diện Web Trung tâm (Web Gateway Dashboard):**
+  ```bash
+  ./bin/web_dashboard 8080
+  ```
+  Mở trình duyệt truy cập **`http://localhost:8080`** để quản lý Căn nhà, Phòng, Quét UDP tìm thiết bị trên mạng, Xác thực mật khẩu và Điều khiển tất cả thiết bị theo thời gian thực trên nền tảng Web.
 
 ---
 
 ## 4. Hướng dẫn Nạp Firmware lên Mạch Phần cứng ESP32 (PlatformIO)
 
-### Phần cứng hỗ trợ
+### Phần cứng & Tính năng nổi bật
 - Bo mạch: **DOIT ESP32 DEVKIT V1** / **NodeMCU-32S** (Chip `ESP-WROOM-32`, giao tiếp USB-UART `CP2102`).
+- **Chế độ Wi-Fi Kép (`WIFI_AP_STA`)**:
+  1. **Tự phát sóng Wi-Fi riêng (SoftAP)**: Tên Wi-Fi `SmartHome_<ID>` (VD: `SmartHome_ESP32_DEV01`), mật khẩu `12345678`, địa chỉ IP cố định **`192.168.4.1`**. Giúp điện thoại và laptop kết nối trực tiếp vào mạch ESP32 ở trên lớp học mà không cần cục phát Router!
+  2. **Kết nối đồng thời vào Wi-Fi Router (Station)**: Hoạt động song song trong mạng LAN gia đình.
+- **Tích hợp đồng thời 3 dịch vụ mạng trên mạch ESP32**:
+  - **UDP Port `9999`**: Phản hồi bản tin quét thiết bị `SCAN_REQ` từ ứng dụng C (`user_client` & `web_dashboard`).
+  - **TCP Port `8001`**: Xử lý truyền dòng xác thực Token và các lệnh điều khiển từ ứng dụng C.
+  - **HTTP Web Portal (Port `80` - `http://192.168.4.1`)**: Giao diện Web nhúng trực tiếp trên chip ESP32 cho phép điện thoại/máy tính điều khiển và cấu hình Wi-Fi/Vai trò thiết bị ngay trên trình duyệt.
 - **Đèn LED tích hợp (`GPIO 2`)**: Sáng/tắt theo lệnh Bật/Tắt và thay đổi độ sáng PWM theo tốc độ gió quạt (Mức 1, 2, 3) hoặc công suất điều hòa.
 - **Nút nhấn vật lý `BOOT` (`GPIO 0`)**: Bấm trực tiếp nút `BOOT` trên mạch để đảo trạng thái Bật/Tắt tại chỗ.
 
